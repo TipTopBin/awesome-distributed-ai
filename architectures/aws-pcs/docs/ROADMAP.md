@@ -14,21 +14,25 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   NAT gateway). This unblocks `OpenZFSDeploymentType=MULTI_AZ` and higher-availability
   layouts. *(Note: OpenZFS MULTI_AZ wiring of the 2nd subnet into the FSx resource is a
   follow-up; the subnets + routing are in place.)*
-- [ ] 🟡 **Targeted ODCR support for GPU node groups.** Today `CapacityReservationId`
-  on `add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300` is **Capacity Block for ML only** —
-  setting it forces `MarketType=capacity-block` and drops the placement group, so a
-  *targeted* On-Demand Capacity Reservation (ODCR) cannot be consumed (only "open" ODCRs,
-  via the empty/On-Demand path, work). Add a `CapacityReservationType` enum
-  (`none` | `capacity-block` | `targeted-odcr`) and branch the launch template:
-  `targeted-odcr` sets `CapacityReservationTarget` **without** `MarketType=capacity-block`
-  and **keeps** the placement group (On-Demand billing against the reservation).
-  `none`/`capacity-block` stay equivalent to today (backward compatible). Replaces the
-  current "do not put an ODCR ID here" caveat. Verification can be done **without GPU
-  capacity**: (1) static — create the GPU CNGs with `Min/MaxCount=0` and assert the
-  generated launch template's `CapacityReservationSpecification`/`InstanceMarketOptions`/
-  `Placement` per type; (2) dynamic — the branch logic is instance-family-independent, so
-  exercise actual targeted-ODCR consumption (`InstanceLifecycle` empty = On-Demand, reserved
-  count decrements) on a cheap type (c6i/g5).
+- [x] 🟡 **Targeted ODCR support for compute node groups.** Done (issue #1263):
+  the GPU templates (`add-cng-p5`/`add-cng-p6-b200`/`add-cng-p6-b300`) take
+  `CapacityReservationType` (`capacity-block` default | `targeted-odcr`) —
+  `targeted-odcr` sets `CapacityReservationTarget` **without**
+  `MarketType=capacity-block` and **keeps** the placement group (On-Demand
+  billing against the reservation); an empty `CapacityReservationId` stays
+  plain On-Demand / open-ODCR, so existing stacks are unaffected. The generic
+  CPU CNG (`add-cng.yaml`) takes a targeted ODCR directly via
+  `CapacityReservationId` (deploy-all: `OnDemandCapacityReservationId`; no type
+  enum — Capacity Blocks don't exist for CPU families).
+- [ ] 🟢 **Capacity Reservation resource-group targeting (On-Demand backfill).**
+  Direct ODCR-ID targeting deliberately does not backfill: launches beyond the
+  reservation's instance count fail rather than falling back to plain
+  On-Demand, so `MaxCount` must stay at or below the reserved count. EC2's
+  `CapacityReservationTarget.CapacityReservationResourceGroupArn` (a resource
+  group of reservations) is the backfill-capable form — instances prefer
+  reserved capacity and overflow to On-Demand. Expose it as an alternative to
+  the plain ID (mutually exclusive), letting `MaxCount` exceed the reserved
+  count for burst-above-reservation queues.
 - [ ] 🟡 **Scope down the instance role's `AmazonS3ReadOnlyAccess`.** The PCS instance
   role in `cluster.yaml` attaches `AmazonS3ReadOnlyAccess` **unconditionally** (every node
   can read every S3 bucket in the account). The upstream
@@ -75,7 +79,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   The *client side* — installing the Lustre client + EFA modules, configuring LNet over
   EFA via the AWS-provided `setup.sh --optimized-for-gds`, and (for GDS) building/loading
   `nvidia-fs.ko` with `cufile.json` — is currently out of scope and not handled by
-  `install-enroot-pyxis.sh`. Add a new opt-in post-install path
+  `install-enroot-pyxis.sh`. Add a new opt-in lifecycle-action script
   (e.g. `scripts/install-fsx-lustre-efa.sh`) that runs the
   [official FSx EFA client setup](https://docs.aws.amazon.com/fsx/latest/LustreGuide/configure-efa-clients.html)
   and the GDS driver build, surface a `OnDemandEnableFSxLustreEfaClient` /
@@ -95,7 +99,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 - [ ] 🟡 **Spack as a first-class install option.** Today the cluster ships Enroot/Pyxis
   (containers) + the PCS-Ready DLAMI's pre-installed CUDA/NCCL/EFA stack, but no native
   package manager for HPC software (MPI variants, BLAS/LAPACK, scientific libraries,
-  source-built apps). Add an opt-in `Spack` install path — e.g. a `PostInstallScriptUrl`
+  source-built apps). Add an opt-in `Spack` install path — e.g. a node lifecycle action
   variant that bootstraps Spack into shared `/fsx`, configures
   [aws-pcluster-spack](https://github.com/spack/spack-configs)-style external packages
   for PCS (Slurm, EFA libfabric, FSx for Lustre client), and uses the
@@ -106,7 +110,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
   workloads, add an opt-in install path (apt repo or shared `/fsx` install) that places
   Intel oneAPI HPC Toolkit on the cluster, with `module load`-style discoverability that
   composes with the Spack option above. Likely a separate
-  `PostInstallScriptUrl`-style script invoked by users explicitly (large download, not
+  lifecycle-action script invoked by users explicitly (large download, not
   every cluster needs it).
 - [ ] 🟢 **NVIDIA HPC SDK install option.** Same shape as the Intel one — opt-in
   install of the NVIDIA HPC SDK (nvhpc, nvfortran, NCCL/CUDA-aware MPI variants) for
@@ -148,7 +152,7 @@ Priority: 🔴 high · 🟡 medium · 🟢 low
 
 - [ ] 🟡 **AWS-managed monitoring stack option.** Offer Amazon Managed Service for
   Prometheus + Amazon Managed Grafana as an alternative to the self-hosted stack on the
-  login node (see `4.validation_and_observability/4.prometheus-grafana`), so users can
+  login node (see `observability/prometheus-grafana`), so users can
   use a managed backend instead of running the containers themselves.
 - [ ] 🟢 **Persist Prometheus TSDB / Grafana DB across login-node replacement.** Monitoring
   runs on the login node and is otherwise replacement-safe (compute scraping is pull-based

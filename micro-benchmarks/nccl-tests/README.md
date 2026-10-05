@@ -4,7 +4,8 @@
 
 ## 0. Prepare the runtime environment
 
-### Slurm 
+### Slurm
+
 If you are using Slurm, this guide assumes that you have the following:
 
 - A functional Slurm cluster on AWS.
@@ -12,56 +13,61 @@ If you are using Slurm, this guide assumes that you have the following:
 - Enroot requires libmd to compile and squashfs-tools to execute.
 - A shared directory mounted on `/apps`
 
-It is recommended that you use the templates in the architectures [directory](../../1.architectures)
+It is recommended that you use the templates in the architectures [directory](../../architectures)
 
 ### Amazon EKS
+
 If you are using EKS, this guide assumes that you have the following:
 
 - A functional EKS cluster on AWS. <br/>
-To set up one, please refer to [aws-do-eks](https://bit.ly/do-eks), [Amazon EKS Blueprints for Terraform](https://github.com/aws-ia/terraform-aws-eks-blueprints/tree/main), [Amazon EKS Blueprints for CDK](https://aws-quickstart.github.io/cdk-eks-blueprints/), or others.
+To create one, use an EKS provisioning method supported by your organization.
 - NVIDIA device plugin deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/nvidia-device-plugin](https://github.com/aws-samples/aws-do-eks/blob/main/Container-Root/eks/deployment/nvidia-device-plugin) or [k8s-device-plugin/deployments](https://github.com/NVIDIA/k8s-device-plugin/tree/main/deployments).
+For deployment options, see the [NVIDIA Kubernetes device plugin](https://github.com/NVIDIA/k8s-device-plugin).
 - EFA device plugin deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/efa-device-plugin](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/efa-device-plugin) or [aws-efa-eks](https://github.com/aws-samples/aws-efa-eks).
+For deployment instructions, see [Install the EFA device plugin](https://docs.aws.amazon.com/eks/latest/userguide/node-efa.html).
 - Kubeflow MPI operator deployed to your cluster. <br/>
-If you need to deploy it, please refer to [deployment/kubeflow/mpi-operator](https://github.com/aws-samples/aws-do-eks/tree/main/Container-Root/eks/deployment/kubeflow/mpi-operator) or [kubeflow/mpi-operator](https://github.com/kubeflow/mpi-operator). 
+For deployment options, see [Kubeflow MPI Operator](https://github.com/kubeflow/mpi-operator).
 - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#cliv2-linux-install)
 
 ## 1. Prepare the container image and other artifacts
 
 The NCCL tests are packaged in a container.
 
-> You can set versions and the branch for NCCL and EFA by editing the variables below in the Dockerfile.
+The container pins the following mutually compatible release set. EFA installer 1.50.0 bundles aws-ofi-nccl 1.21.1 and libfabric 2.6.0amzn1.0; the [aws-ofi-nccl 1.21.1 release notes](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1) identify NCCL 2.31.2-1 as its tested NCCL release, and the [EFA installer 1.50.0 release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) identify the bundled plugin version.
 
 > | Variable              | Default     | Repository                                                                                  |
 > |-----------------------|-------------|---------------------------------------------------------------------------------------------|
-> |`CUDA_VERSION`         | `13.0.2`    |                                                                                             |
-> |`GDRCOPY_VERSION`      | `v2.5.2`    | [link](https://github.com/NVIDIA/gdrcopy)                                                   |
-> |`EFA_INSTALLER_VERSION`| `1.48.0`    | [link](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-start.html#efa-start-enable) |
-> |`AWS_OFI_NCCL_VERSION` | *(deprecated)* | AWS OFI NCCL plugin is now bundled with EFA installer                                    |
-> |`NCCL_VERSION`         | `v2.30.4-1` | [link](https://github.com/NVIDIA/nccl)                                                      |
-> |`NCCL_TESTS_VERSION`   | `v2.18.3`   | [link](https://github.com/NVIDIA/nccl-tests)                                                |
+> |`CUDA_VERSION`         | `13.1.2`    | [CUDA container tag](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cuda/tags)       |
+> |`GDRCOPY_VERSION`      | `v2.6`      | [GDRCopy v2.6](https://github.com/NVIDIA/gdrcopy/releases/tag/v2.6)                         |
+> |`EFA_INSTALLER_VERSION`| `1.50.0`    | [EFA release notes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-changelog.html) |
+> |aws-ofi-nccl           | `v1.21.1`   | [aws-ofi-nccl v1.21.1](https://github.com/aws/aws-ofi-nccl/releases/tag/v1.21.1), bundled by EFA installer 1.50.0 |
+> |`NCCL_VERSION`         | `v2.31.2-1` | [NCCL v2.31.2-1](https://github.com/NVIDIA/nccl/releases/tag/v2.31.2-1)                     |
+> |`NCCL_TESTS_VERSION`   | `v2.20.0`   | [nccl-tests v2.20.0](https://github.com/NVIDIA/nccl-tests/releases/tag/v2.20.0)             |
 
-The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103` — i.e. native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; if you target a newer architecture, add it to the `NVCC_GENCODE` lines in `nccl-tests.Dockerfile`.
+The image is built with `NVCC_GENCODE` covering `sm_80`, `sm_86`, `sm_89`, `sm_90`, `sm_100`, and `sm_103`, which provides native binaries for A100, RTX 30/Ada/Lovelace, H100/H200, B200/GB200, and B300/GB300. PTX is not embedded; add a new architecture to both `NVCC_GENCODE` lines in `nccl-tests.Dockerfile` before targeting it.
 
-You must pick each version of the library and set them as variables before proceed:
+Set the pinned versions and image tag from the `micro-benchmarks/nccl-tests` directory:
 
 ```bash
-GDRCOPY_VERSION=v2.5.2
-EFA_INSTALLER_VERSION=1.48.0
-NCCL_VERSION=v2.30.4-1
-NCCL_TESTS_VERSION=v2.18.3
-TAG="efa${EFA_INSTALLER_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
+CUDA_VERSION=13.1.2
+GDRCOPY_VERSION=v2.6
+EFA_INSTALLER_VERSION=1.50.0
+AWS_OFI_NCCL_VERSION=v1.21.1
+NCCL_VERSION=v2.31.2-1
+NCCL_TESTS_VERSION=v2.20.0
+TAG="cuda${CUDA_VERSION}-efa${EFA_INSTALLER_VERSION}-ofi${AWS_OFI_NCCL_VERSION}-nccl${NCCL_VERSION}-tests${NCCL_TESTS_VERSION}"
 CONTAINER_IMAGE_NAME_TAG="nccl-tests:${TAG}"
 ```
 
 ### Build the container
 
-If you wish to build the containar image by yourself, follow this section. Alternatively, you can use a prebuild image on a public ECR repository `public.ecr.aws/hpc-cloud/nccl-tests`. If you wish to do so, skip this section.
+Build the container locally with the commands below, or use the matching pinned tag from `public.ecr.aws/hpc-cloud/nccl-tests` after that tag has been published.
 
 1. Build the container image with the command below:
+
    ```bash
    docker build -f nccl-tests.Dockerfile \
+          --build-arg="CUDA_VERSION=${CUDA_VERSION}" \
           --build-arg="GDRCOPY_VERSION=${GDRCOPY_VERSION}" \
           --build-arg="EFA_INSTALLER_VERSION=${EFA_INSTALLER_VERSION}" \
           --build-arg="NCCL_VERSION=${NCCL_VERSION}" \
@@ -69,14 +75,16 @@ If you wish to build the containar image by yourself, follow this section. Alter
           -t ${CONTAINER_IMAGE_NAME_TAG} \
           .
    ```
+
    Note: If you are using an arm64 platform (like p6e-gb200.36xlarge, or any ultraserver comprised of that instance, for example), pass in `--platform=linux/arm64` into the `docker build` command above. Or, just build your image directly on an `arm64` based instance!
- 
+
 1. Once the container image is prepared, you can check if it is present with `docker images`. You should see an output similar to this one:
+
    ```
    REPOSITORY               TAG                        IMAGE ID       CREATED         SIZE
-   nccl                     latest                     6e981e5cf6a5   5 hours ago     8.61GB
+   nccl-tests               cuda13.1.2-efa1.50.0-ofiv1.21.1-ncclv2.31.2-1-testsv2.20.0   <image-id>   <created>   <size>
    ...
-   nvidia/cuda              13.0.2-devel-ubuntu22.04   a86c511c87e1   2 weeks ago     6.56GB
+   nvcr.io/nvidia/cuda      13.1.2-devel-ubuntu22.04   <image-id>   <created>   <size>
    ```
 
 ### Slurm
@@ -103,34 +111,40 @@ To run the NCCL tests on EKS with the local image you built in the previous step
 You can skip this part if you use pre-built image on `public.ecr.aws/hpc-cloud/nccl-tests`.
 
 1. Create the ECR repository if it does not exist
+
    ```bash
    ECR_REPOSITORY_NAME="nccl-tests"
    aws ecr create-repository --repository-name ${ECR_REPOSITORY_NAME}
    ```
 
 1. Get the ECR repository URI:
+
    ```bash
    REPO_URI=`aws ecr describe-repositories --query repositories[].[repositoryUri] | grep "/${ECR_REPOSITORY_NAME}" | tr -d '"' | xargs`
    ECR_URI=${REPO_URI%"/${ECR_REPOSITORY_NAME}"}
    ```
 
 1. Build the container image:
+
    ```bash
    docker image build -t ${REPO_URI}:${TAG} -f ./nccl-tests.Dockerfile .
    ```
+
 1. Login to the container registry
+
    ```bash
    aws ecr get-login-password | docker login --username AWS --password-stdin ${ECR_URI}
    ```
 
 1. Push the container image to the registry
+
    ```bash
    docker image push ${REPO_URI}:${TAG}
    ```
 
 ## 2. Running the NCCL Tests
 
-Note: For topology aware NCCL tests, with features like export to csv, 
+Note: For topology aware NCCL tests, with features like export to csv,
 passing in a topologically sorted hostfile to mpirun, look in slurm/topology-aware-nccl-tests
 
 ### Slurm with container
@@ -154,6 +168,7 @@ sbatch nccl-tests.sbatch
 ### Results
 
 All_reduce performance test will be executed from 8B to 2GB on 2x p4de.24xlarg, the output should look as below (with a lot more information).
+
 ```txt
 0: #       size         count      type   redop    root     time   algbw   busbw #wrong     time   algbw   busbw #wrong
 0: #        (B)    (elements)                               (us)  (GB/s)  (GB/s)            (us)  (GB/s)  (GB/s)       
@@ -189,6 +204,7 @@ All_reduce performance test will be executed from 8B to 2GB on 2x p4de.24xlarg, 
 ```
 
 All_reduce performance test will be executed from 8B to 16GB on 2x p5.48xlarge, the output should look as below (with a lot more information).
+
 ```txt
 0: #       size         count      type   redop    root     time   algbw   busbw #wrong     time   algbw   busbw #wrong
 0: #        (B)    (elements)                               (us)  (GB/s)  (GB/s)            (us)  (GB/s)  (GB/s)       
@@ -228,7 +244,6 @@ All_reduce performance test will be executed from 8B to 16GB on 2x p5.48xlarge, 
 
 To change the type of collective to test, modify the line with `srun` in the file `nccl-tests.sbatch` and change `all_reduce_perf` to any of: `all_gather_perf`, `alltoall_perf`, `gather_perf`, `reduce_perf`, `scatter_perf`, `all_reduce_perf`, `broadcast_perf`, `hypercube_perf`, `reduce_scatter_perf`, `sendrecv_perf`.
 
-
 ### Amazon EKS
 
 1. Prepare the MPIJob manifest
@@ -236,34 +251,38 @@ To change the type of collective to test, modify the line with `srun` in the fil
 
    - `slotsPerWorker: 8`: set to the number of GPUs per node in your cluster
    - `<account>.dkr.ecr.<region>.amazonaws.com/<image>:<tag>`: set to your container image URI. You may specify the public ECR image instead as `image: public.ecr.aws/hpc-cloud/nccl-tests:<tag>`. Note: change both locations in the file. You may use `echo ${CONTAINER_IMAGE_NAME_TAG}` to print the image URI.
-   - `-np 16`: set -np option in mpirun to (*`number_of_worker_nodes`* * *`number_of_gpus_per_node`*), other mpirun parameters if needed for your instance type, please refer to [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl/blob/master/doc/efa-env-var.md)
+   - `-np 16`: set `-np` to `number_of_worker_nodes * number_of_gpus_per_node`. For other `mpirun` parameters, see the [aws-ofi-nccl v1.21.1 EFA environment variables](https://github.com/aws/aws-ofi-nccl/blob/v1.21.1/doc/efa-env-var.md).
    - `replicas: 2`: set to number of worker pods you would like the test to run on. This must be less than or eaqual to the number of nodes in your cluster.
    - `node.kubernetes.io/instance-type: "p5.48xlarge"`: set to the instance type of the nodes in your cluster against which you would like the nccl test to be run
    - `nvidia.com/gpu: 8`: set to the number of GPUs per node in your cluster, adjust in both the limits and requests section
    - `vpc.amazonaws.com/efa: 32`: set to the number of EFA adapters per node in your cluster, adjust in both the limits and requests section
 
    Please note that the current default settings have been specified for instance type p5.48xlarge. Only the image URI is required to be set for running the test on this instance type.
-   The current manifest executes the `all_reduce_perf` test. If you wish to execute other NCCL tests, change the section between lines 59 and 73 in this MPIJob manifest file. 
+   The current manifest executes the `all_reduce_perf` test. If you wish to execute other NCCL tests, change the section between lines 59 and 73 in this MPIJob manifest file.
 
 2. Apply the MPIJob manifest to the cluster
+
    ```bash
    kubectl apply -f ./nccl-tests.yaml
    ```
 
 3. Wait until pods to enter the Running state
    To monitor the state of the pods, execute the following command:
+
    ```bash
    watch kubectl get pods -o wide
    ```
+
    Once the state of the launcher and worker pods becomes "Running", press `Ctrl-C` to return to the command prompt.
 
 4. View test logs
    To follow the test logs, execute the following command:
+
    ```bash
    kubectl logs -f $(kubectl get pods | grep launcher | cut -d ' ' -f 1)
    ```
 
-   The following is an example exerpt from the logs of a NCCL all_reduce_perf test, executed on a cluster with two p5.48xlarge instances (using EFA_INSTALLER_VERSION=1.28.0, NCCL_TESTS_VERSION=master, NCCL_VERSION=2.18.5):
+   The following historical output is from `all_reduce_perf` on two `p5.48xlarge` instances with EFA installer 1.28.0, nccl-tests v2.13.9, and NCCL 2.18.5. It is an output-format example, not validation of the current release set.
 
    ```log
    [1,0]<stdout>:#                                                              out-of-place                       in-place          
@@ -280,10 +299,12 @@ To change the type of collective to test, modify the line with `srun` in the fil
    [1,0]<stdout>:# Out of bounds values : 0 OK
    [1,0]<stdout>:# Avg bus bandwidth    : 52.9753
    ```
+
    Press `Ctrl-C` to return to the command prompt if you do not wish to wait until the launcher pod enters the "Completed" state.
 
 5. Clean up test run
    Before running a subsequent test, the current MPIJob needs to be deleted:
+
    ```bash
    kubectl delete -f nccl-tests.yaml
    ```
@@ -296,30 +317,28 @@ The algorithm bandwidth is based on the following data_size / time where data_si
 
 | API           | Algbw                                              | Busbw                                    | Theoretical Max BW    | source                              |
 |---------------|----------------------------------------------------|------------------------------------------|-----------------------|-------------------------------------|
-| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * (2*(nranks - 1)/nranks) | B = S/t * (2*(n-1)/n) | https://tinyurl.com/all-reduce      |
-| ReduceScatter | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/reduce-scatter  |
-| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/all-gather      |
-| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-broadcast  |
-| Gather        | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-gather     |
-| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/nccl-reduce     |
-| Scatter       | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-scatter    |
-| AlltoAll      | baseBw = (count * nranks * typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | https://tinyurl.com/nccl-all-to-all |
-| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | https://tinyurl.com/sendrcv         |
-
-
+| AllReduce     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw *(2*(nranks - 1)/nranks) | B = S/t *(2*(n-1)/n) | <https://tinyurl.com/all-reduce>      |
+| ReduceScatter | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/reduce-scatter>  |
+| AllGather     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/all-gather>      |
+| Broadcast     | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-broadcast>  |
+| Gather        | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-gather>     |
+| Reduce        | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/nccl-reduce>     |
+| Scatter       | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-scatter>    |
+| AlltoAll      | baseBw = (count *nranks* typesize) / 1.0E9 / sec | busBw = baseBw * ((nranks - 1)/nranks)   | B = S/t * (n-1)/n     | <https://tinyurl.com/nccl-all-to-all> |
+| SendRecv      | baseBw = (count * typesize) / 1.0E9 / sec          | busBw = baseBw                           | B = S/t               | <https://tinyurl.com/sendrcv>         |
 
 #### Notes for Algbw & Busbw**
 
-* `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
-* `count` : number of elements transferred through the collective communication operation.
-* `nranks` : number of ranks participating to the collective communication operation.
-* `sec` : time in seconds to execute the collective communication operation.
+- `typesize` : size of the data type transferred in bytes (2 bytes for half-precision, 4 for single precision....).
+- `count` : number of elements transferred through the collective communication operation.
+- `nranks` : number of ranks participating to the collective communication operation.
+- `sec` : time in seconds to execute the collective communication operation.
 
 #### Notes for the Theoretical Max BW
 
 The formula defines the maximum theoretical bandwidth that can be achieved on different communication collectives in the ideal case.
 
-* `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
-* `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
-* `S` : number of elements being communicated (similar to count for Algbw and Busbw)
-* `B` : theoretical peak bandwidth.
+- `n` : number of ranks participating to the operation. (similar to nranks for Algbw and Busbw)
+- `t` : time to complete the operation. (similar to sec for Algbw and Busbw)
+- `S` : number of elements being communicated (similar to count for Algbw and Busbw)
+- `B` : theoretical peak bandwidth.
